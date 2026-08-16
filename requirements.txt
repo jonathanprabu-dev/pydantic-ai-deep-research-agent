@@ -1,0 +1,5 @@
+pydantic-ai-slim[google,openrouter]
+gradio
+python-dotenv
+playwright
+python-docx

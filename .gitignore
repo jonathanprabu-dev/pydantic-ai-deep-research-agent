@@ -1,0 +1,26 @@
+# Secrets and environment
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Gradio and the browser profile it drives. The profile holds live Google
+# session cookies -- never commit it.
+.gradio/
+.chrome-profile/
+
+# Local tooling state, not part of the project
+.remember/
+.claude/
+.playwright-mcp/
+
+# Run logs, including the research transcripts and the app's own output
+*.log
+
+# Scraped reference dump, 4.4 MB and regenerable
+docs.md
+
+# The CLI's scratch output; the same report is kept under its own name
+report.md
