@@ -1,4 +1,4 @@
-# Starts the Deep Research Agent at login and opens it in Chrome.
+# Starts the Pydantic AI Deep Research Agent at login and opens it in Chrome.
 #
 # Installed by install-autostart.ps1, which drops a .vbs stub in the Startup
 # folder so this runs without a console window flashing on screen.

@@ -41,9 +41,9 @@ MIN_PAGE_CHARS = 400
 # tab in a window the user is invited to click into is a tab they will close, so
 # say what it is for.
 KEEPALIVE_HTML = """
-<title>Deep Research Agent</title>
+<title>Pydantic AI Deep Research Agent</title>
 <body style="font:16px system-ui;margin:3rem;color:#333">
-<h2>This window belongs to the Deep Research Agent.</h2>
+<h2>This window belongs to the Pydantic AI Deep Research Agent.</h2>
 <p>Searches open and close their own tabs here. Please leave this tab open —
 closing it shuts the browser down and the app has to start Chrome again.</p>
 <p>If a Google consent screen or CAPTCHA appears in another tab, solve it there.

@@ -185,8 +185,8 @@ def make_combined():
     )
 
 
-with gr.Blocks(title="Deep Research Agent") as demo:
-    gr.Markdown("# Deep Research Agent\nPydantic AI + Gemini, searching Google in real Chrome.")
+with gr.Blocks(title="Pydantic AI Deep Research Agent") as demo:
+    gr.Markdown("# Pydantic AI Deep Research Agent\nGemini-backed, searching Google in real Chrome.")
 
     with gr.Tabs():
         with gr.Tab("Chat"):

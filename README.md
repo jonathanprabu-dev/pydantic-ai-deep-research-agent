@@ -1,4 +1,4 @@
-# Deep Research Agent
+# Pydantic AI Deep Research Agent
 
 A research agent built with **Pydantic AI**, with a **Gradio** UI. Give it a stock ticker, a company, or any question, and it runs a multi-step Google research pass **in a real Chrome window** and writes a structured, cited report. Runs on Google Gemini or any OpenRouter model, picked in `.env`.
 
