@@ -98,6 +98,7 @@ async def main() -> None:
     al.google_search = fake_search
     al.fetch_page = fake_fetch
     al.RATE_LIMIT_WAIT = 0
+    al.SEARCH_PAUSE = (0, 0)
     al._brief_agent = Agent(FunctionModel(scripted_model), output_type=al.AccountBrief,
                             instructions=al.BRIEF_INSTRUCTIONS)
 

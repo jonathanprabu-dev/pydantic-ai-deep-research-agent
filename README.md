@@ -151,7 +151,9 @@ So the routine is: update your list, run the same command. If the daily limit st
 - Your list is never changed. The results file is saved after every company, so a crash or a quota stop loses nothing.
 - A company that appears twice is researched once. Blank company names are skipped.
 
-**Cost:** one model request per company plus four or five Google searches, so a free OpenRouter key covers about 45 companies a day.
+**Cost and pace:** one model request per company plus two or three Google searches (three with `--focus`), so a free OpenRouter key covers about 45 companies a day. Searches are spaced 6 to 12 seconds apart, because Google blocks a browser that searches too fast; a company takes about a minute.
+
+**If Google blocks the browser** ("unusual traffic" or a CAPTCHA in the Chrome window): solve the CAPTCHA in that window if one is shown, then run the same command again. If there is no CAPTCHA, stop and wait an hour or two. Retrying while blocked keeps the block going.
 
 **Tuning:** `SEARCHES` at the top of `account_list.py` holds the Google queries per row; `PAGES_PER_ROW` sets how many full pages are read.
 

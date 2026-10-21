@@ -20,7 +20,7 @@ Same rules as the single-company report:
   - it never edits the input file; results go to a new file, saved after
     every row so a crash or a quota stop loses nothing
 
-Cost: one model request per row (plus Google searches in Chrome), so a free
+Cost: one model request per row (plus 2-3 paced Google searches in Chrome), so a free
 OpenRouter key covers roughly 45 accounts a day.
 """
 
@@ -30,6 +30,7 @@ import argparse
 import asyncio
 import csv
 import os
+import random
 import re
 import sys
 import tempfile
@@ -53,12 +54,15 @@ PAGE_CHARS = 8_000
 MAX_POINTS = 3             # per column
 
 # One Google search per entry. {company}, {domain} and {year} are filled in per row.
+# Kept to two per company on purpose: Google blocks a browser that searches too
+# often, and a block stops the whole run.
 SEARCHES = {
-    "overview": ('site:{domain} about', '"{company}" company overview'),  # (with website, without)
-    "news": ('"{company}" news {year}', '"{company}" news {year}'),
-    "priorities": ('"{company}" strategy OR expansion OR launch OR partnership {year}',) * 2,
-    "team": ('"{company}" hiring OR appoints OR "names new" OR funding',) * 2,
+    "overview": ('site:{domain}', '"{company}" company'),  # (with website, without)
+    "news": ('"{company}" news OR announces OR launches OR hiring OR partnership {year}',) * 2,
 }
+# Seconds to pause between Google searches, picked at random in this range, so
+# the run looks like a person searching rather than a script.
+SEARCH_PAUSE = (6.0, 12.0)
 FOCUS_SEARCH = '"{company}" {focus}'
 
 COMPANY_HEADERS = ("company", "company name", "account", "account name", "organization", "name")
@@ -231,7 +235,10 @@ def _cell(points: list[tuple[str, list[int]]]) -> str:
 async def research_account(company: str, domain: str, focus: str) -> dict[str, str]:
     """Search, read and brief one company. Returns the new column values."""
     queries = build_queries(company, domain, focus)
-    batches = await asyncio.gather(*(google_search(q, RESULTS_PER_SEARCH) for q in queries.values()))
+    batches = []
+    for query in queries.values():
+        await _pause()
+        batches.append(await google_search(query, RESULTS_PER_SEARCH))
 
     results: dict[str, SearchResult] = {}
     for batch in batches:
@@ -284,6 +291,12 @@ async def research_account(company: str, domain: str, focus: str) -> dict[str, s
     if focus:
         row[FOCUS_COLUMN] = _cell(fields["focus_fit"])
     return row
+
+
+async def _pause() -> None:
+    low, high = SEARCH_PAUSE
+    if high > 0:
+        await asyncio.sleep(random.uniform(low, high))
 
 
 def _today() -> str:

@@ -11,7 +11,7 @@ import asyncio
 import re
 import sys
 from pathlib import Path
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 from playwright.async_api import BrowserContext, Page, async_playwright
 from playwright.async_api import Error as PlaywrightError
@@ -167,6 +167,25 @@ def _looks_blocked(url: str, body: str) -> bool:
     return any(text in head for text in BLOCK_TEXT)
 
 
+async def _resolve_google_link(page: Page, link: str) -> str:
+    """Turn a Google /goto or /url wrapper into the page it points at.
+
+    Anything else, or a wrapper that will not resolve, comes back unchanged and
+    is then dropped as a google.com link.
+    """
+    parsed = urlparse(link)
+    if not parsed.netloc.endswith("google.com") or parsed.path not in ("/goto", "/url"):
+        return link
+    target = parse_qs(parsed.query).get("q", [""])[0]  # the older, readable form
+    if target.startswith("http"):
+        return target
+    try:
+        response = await page.request.get(link, max_redirects=0, timeout=10_000)
+    except PlaywrightError:
+        return link
+    return response.headers.get("location") or link
+
+
 async def google_search(query: str, limit: int = 10) -> list[SearchResult]:
     """Run one Google search in Chrome and return the organic results."""
     url = f"https://www.google.com/search?q={quote_plus(query)}&num=20&hl=en&gl=us"
@@ -175,6 +194,12 @@ async def google_search(query: str, limit: int = 10) -> list[SearchResult]:
         page = await _open_page()
         try:
             await page.goto(url, wait_until="domcontentloaded")
+            # Google streams the results in after domcontentloaded; reading at
+            # once sees an empty page and reports it as blocked.
+            try:
+                await page.wait_for_selector("#rso h3, #search h3", timeout=10_000)
+            except PlaywrightError:
+                pass  # a block page or a genuinely empty result; checked below
             body = await page.inner_text("body")
             if _looks_blocked(page.url, body):
                 raise SearchBlocked(
@@ -204,6 +229,10 @@ async def google_search(query: str, limit: int = 10) -> list[SearchResult]:
                 }
                 """
             )
+            # Google now hides the target behind an opaque /goto?url=... link
+            # that only its own redirect can decode, so ask it, in this session.
+            for item in raw[:limit]:
+                item["url"] = await _resolve_google_link(page, item.get("url") or "")
         finally:
             await _close_page(page)
 
