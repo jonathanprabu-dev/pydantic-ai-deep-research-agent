@@ -105,7 +105,7 @@ Searches run in a dedicated Chrome profile at `.chrome-profile/`, kept separate 
 ```powershell
 python account_list.py sample_accounts.csv
 python account_list.py accounts.xlsx --focus "contact center" --limit 10
-python account_list.py accounts.xlsx --resume
+python account_list.py accounts.xlsx --fresh     # start over instead of carrying on
 ```
 
 **Input:** a `.csv` or `.xlsx` with a company column (`Company`, `Company Name`, `Account` or `Account Name`) and ideally a website column (`Website` or `Domain`). Every other column is kept as it is.
@@ -125,10 +125,10 @@ python account_list.py accounts.xlsx --resume
 
 - A point survives only if it cites a URL that was really in that row's search results. Invented links are removed, and a point left with no real source is deleted.
 - It never collects contact details. Anything that looks like an email address or phone number is stripped. Contact data belongs in an enrichment tool such as Clay, with verification.
-- The input file is never changed. The output is saved after every row, so a crash or a quota stop loses nothing, and `--resume` carries on from the first unfinished row.
+- The input file is never changed. The output is saved after every row, so a crash or a quota stop loses nothing, and running the same command again carries on automatically: finished rows are skipped and failed ones retried. Use `--fresh` to start over.
 - A company that appears twice is researched once. Blank company names are skipped.
 
-**Cost:** one model request per company plus four or five Google searches, so a free OpenRouter key covers about 45 companies a day. When the daily cap is hit the run stops cleanly and tells you to `--resume` after the reset.
+**Cost:** one model request per company plus four or five Google searches, so a free OpenRouter key covers about 45 companies a day. When the daily cap is hit the run stops cleanly and tells you to run the same command again after the reset.
 
 **Tuning:** `SEARCHES` at the top of `account_list.py` holds the Google queries per row; `PAGES_PER_ROW` sets how many full pages are read.
 

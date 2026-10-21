@@ -5,7 +5,7 @@
 No API key, no Chrome, no network. Checks the rules that matter:
 invented citations are dropped, emails and phone numbers are removed, a
 look-alike company is flagged, the input file is never touched, a daily-quota
-stop keeps finished rows, and --resume carries on from there.
+stop keeps finished rows, and running again carries on from there.
 """
 
 from __future__ import annotations
@@ -136,23 +136,27 @@ async def main() -> None:
     cell = ws.cell(row=2, column=list(rows[0]).index("Talking Point") + 1)
     check(cell.data_type == "s", "talking point cell is text, not a formula")
 
-    # Refuses to clobber: no --resume, and output == input.
-    for kwargs, label in (({}, "existing output needs --resume"), ({"resume": True}, "output can't be the input")):
-        try:
-            await al.run_list(src, out if not kwargs else src, **kwargs)
-            check(False, label)
-        except SystemExit:
-            check(True, label)
+    # Never writes over the input.
+    try:
+        await al.run_list(src, src)
+        check(False, "output can't be the input")
+    except SystemExit:
+        check(True, "output can't be the input")
 
-    # Run 2: quota is back; resume does only the unfinished row.
+    # Run 2: quota is back; the same call carries on with only the unfinished row.
     QUOTA_ON.clear()
     SEARCH_LOG.clear()
-    counts = await al.run_list(src, out, focus="contact center", resume=True)
+    counts = await al.run_list(src, out, focus="contact center")
     rows = read_out(out)
     check(rows[5]["Research Status"] == "Done", "resume finished the failed row")
     check(counts["already"] == 3 and counts["done"] == 1, f"resume skipped finished rows {counts}")
     check(all("Acme" not in q for q in SEARCH_LOG), "no repeat searches for finished rows")
     check(fingerprint(src) == before, "input still unchanged")
+
+    # --fresh starts over from the input.
+    counts = await al.run_list(src, out, focus="contact center", fresh=True)
+    check(counts["already"] == 0 and counts["done"] == 3, f"--fresh researches every row again {counts}")
+    check(fingerprint(src) == before, "input unchanged after --fresh")
 
     # Limit.
     out2 = work / "limited.xlsx"

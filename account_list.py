@@ -2,7 +2,8 @@
 
     python account_list.py accounts.xlsx
     python account_list.py accounts.csv --focus "contact center" --limit 10
-    python account_list.py accounts.xlsx --resume        # carry on after a quota stop
+    python account_list.py accounts.xlsx                 # run it again: carries on where it stopped
+    python account_list.py accounts.xlsx --fresh         # start over from the input
 
 Reads a spreadsheet with a company column (and ideally a website column),
 researches each company from public Google results, and writes a copy of the
@@ -379,16 +380,14 @@ def _same_file(a: Path, b: Path) -> bool:
 
 async def run_list(
     src: Path, out: Path, *, focus: str = "", limit: int | None = None,
-    resume: bool = False, sheet: str | None = None,
+    fresh: bool = False, sheet: str | None = None,
 ) -> dict[str, int]:
     if _same_file(src, out):
         raise SystemExit("The output file would overwrite your input. Choose a different --out.")
 
-    if out.exists():
-        if not resume:
-            raise SystemExit(
-                f"{out.name} already exists. Use --resume to carry on with it, or --out for a new file."
-            )
+    if out.exists() and not fresh:
+        # Carry on automatically: finished rows are skipped, failed ones retried.
+        print(f"Continuing {out.name} from where it stopped (use --fresh to start over).", file=sys.stderr)
         headers, rows = read_table(out, None)
     else:
         headers, rows = read_table(src, sheet)
@@ -441,7 +440,7 @@ async def run_list(
         try:
             values = await research_account(company, domain, focus)
         except SearchBlocked as exc:
-            stop_message = f"Google is asking for a check in the Chrome window. Solve it, then run again with --resume. ({exc})"
+            stop_message = f"Google is asking for a check in the Chrome window. Solve it, then run the same command again to carry on. ({exc})"
             row[col[STATUS]] = "Failed: Google check"
             counts["failed"] += 1
             write_table(out, headers, rows)
@@ -454,7 +453,7 @@ async def run_list(
             counts["failed"] += 1
             write_table(out, headers, rows)
             if "out of quota for today" in message:
-                stop_message = message + " Run again with --resume after the reset; finished rows are kept."
+                stop_message = message + " Run the same command again after the reset; it carries on and finished rows are kept."
                 break
             continue
 
@@ -478,7 +477,9 @@ def main() -> None:
     parser.add_argument("--out", type=Path, help="Output .xlsx (default: <name>_researched.xlsx next to the input)")
     parser.add_argument("--focus", default="", help='Extra topic to look for, e.g. "contact center"')
     parser.add_argument("--limit", type=int, help="Research at most this many rows in this run")
-    parser.add_argument("--resume", action="store_true", help="Carry on with an existing output file")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Start over from the input, replacing the existing output file")
+    parser.add_argument("--resume", action="store_true", help=argparse.SUPPRESS)  # old flag; now automatic
     parser.add_argument("--sheet", help="Sheet name in the input workbook (default: the first)")
     args = parser.parse_args()
 
@@ -494,7 +495,7 @@ def main() -> None:
     async def go() -> dict[str, int]:
         try:
             return await run_list(args.file, out, focus=args.focus.strip(), limit=args.limit,
-                                  resume=args.resume, sheet=args.sheet)
+                                  fresh=args.fresh, sheet=args.sheet)
         finally:
             await close_browser()
 
