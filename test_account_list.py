@@ -44,13 +44,19 @@ async def fake_fetch(url: str, max_chars: int = 12_000) -> str:
 
 
 QUOTA_ON: set[str] = set()
+MINUTE_LIMIT_ONCE: set[str] = set()
+MODEL_CALLS: list[str] = []
 
 
 def scripted_model(messages, info: AgentInfo) -> ModelResponse:
     prompt = messages[-1].parts[-1].content
     company = prompt.split("\n")[0].removeprefix("Company: ")
+    MODEL_CALLS.append(company)
     if company in QUOTA_ON:
         raise ModelHTTPError(429, "test-model", body={"error": "quota exceeded perDay"})
+    if company in MINUTE_LIMIT_ONCE:
+        MINUTE_LIMIT_ONCE.discard(company)
+        raise ModelHTTPError(429, "test-model", body={"error": "rate limit perMinute"})
     slug = company.lower().replace(" ", "")
     real = f"https://reuters.com/{slug}"
     own = f"https://{slug}.com/news"
@@ -91,6 +97,7 @@ def check(condition: bool, label: str) -> None:
 async def main() -> None:
     al.google_search = fake_search
     al.fetch_page = fake_fetch
+    al.RATE_LIMIT_WAIT = 0
     al._brief_agent = Agent(FunctionModel(scripted_model), output_type=al.AccountBrief,
                             instructions=al.BRIEF_INSTRUCTIONS)
 
@@ -148,20 +155,54 @@ async def main() -> None:
     SEARCH_LOG.clear()
     counts = await al.run_list(src, out, focus="contact center")
     rows = read_out(out)
-    check(rows[5]["Research Status"] == "Done", "resume finished the failed row")
-    check(counts["already"] == 3 and counts["done"] == 1, f"resume skipped finished rows {counts}")
+    check(rows[5]["Research Status"] == "Done", "second run finished the failed row")
+    check(counts["already"] == 3 and counts["done"] == 1, f"second run reused finished rows {counts}")
     check(all("Acme" not in q for q in SEARCH_LOG), "no repeat searches for finished rows")
     check(fingerprint(src) == before, "input still unchanged")
 
+    # Run 3: the list is edited - a new company, an owner change, a company removed.
+    with src.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["Account ID", "Company Name", "Website", "Owner", "Tier"])
+        w.writerow(["A-1", "Acme Support", "acmesupport.com", "BDR C", "1"])
+        w.writerow(["A-2", "Northstar Logistics", "northstar.io", "BDR B", "2"])
+        w.writerow(["A-6", "Bright Call", "brightcall.com", "BDR B", "1"])
+        w.writerow(["A-7", "Delta Care", "deltacare.com", "BDR A", "2"])
+    before = fingerprint(src)
+    MODEL_CALLS.clear()
+    MINUTE_LIMIT_ONCE.add("Delta Care")
+    counts = await al.run_list(src, out, focus="contact center")
+    rows = read_out(out)
+    names = [r["Company Name"] for r in rows]
+    check(names == ["Acme Support", "Northstar Logistics", "Bright Call", "Delta Care"],
+          "results follow the edited list: new company added, removed company gone")
+    check(MODEL_CALLS == ["Delta Care", "Delta Care"], "only the new company researched (after one wait)")
+    check(rows[3]["Research Status"] == "Done", "per-minute limit waited out automatically")
+    check(rows[0]["Owner"] == "BDR C" and rows[0]["Tier"] == "1", "edits and new columns from the list show up")
+    check(rows[0]["Research Status"] == "Done" and "300-seat" in rows[0]["Focus Fit"], "earlier research kept")
+    check(rows[1]["Research Status"] == "Check match", "earlier 'Check match' kept for a person to review")
+    check(counts["already"] == 3 and counts["done"] == 1, f"counts after list edit {counts}")
+    check(fingerprint(src) == before, "edited input unchanged")
+
+    # Giving it the results file itself as the list also works, and reuses the research.
+    MODEL_CALLS.clear()
+    counts = await al.run_list(out, work / "again.xlsx", focus="contact center")
+    check(not MODEL_CALLS and counts["already"] == 4, "results file as input: nothing researched twice")
+
     # --fresh starts over from the input.
     counts = await al.run_list(src, out, focus="contact center", fresh=True)
-    check(counts["already"] == 0 and counts["done"] == 3, f"--fresh researches every row again {counts}")
+    check(counts["already"] == 0 and counts["done"] == 3 and counts["check"] == 1,
+          f"--fresh researches every row again {counts}")
     check(fingerprint(src) == before, "input unchanged after --fresh")
 
     # Limit.
     out2 = work / "limited.xlsx"
     counts = await al.run_list(src, out2, limit=1)
     check(counts["done"] + counts["check"] == 1, "--limit stops after N rows")
+    check(counts["waiting"] == 3 and read_out(out2)[1]["Research Status"].startswith("Waiting"),
+          "rows not reached are marked Waiting")
+    counts = await al.run_list(src, out2)
+    check(counts["already"] == 1 and counts["waiting"] == 0, "running again finishes the Waiting rows")
 
     # Missing company column.
     bad = work / "bad.csv"

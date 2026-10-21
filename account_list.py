@@ -2,8 +2,9 @@
 
     python account_list.py accounts.xlsx
     python account_list.py accounts.csv --focus "contact center" --limit 10
-    python account_list.py accounts.xlsx                 # run it again: carries on where it stopped
-    python account_list.py accounts.xlsx --fresh         # start over from the input
+    python account_list.py accounts.xlsx                 # run again any time: researches only
+                                                         # new or unfinished companies
+    python account_list.py accounts.xlsx --fresh         # research every company again
 
 Reads a spreadsheet with a company column (and ideally a website column),
 researches each company from public Google results, and writes a copy of the
@@ -41,6 +42,8 @@ from pydantic_ai import Agent
 
 from agent import REQUESTS_PER_RUN, check_backend, get_model
 from browser import SearchBlocked, close_browser, fetch_page, google_search
+from pydantic_ai.exceptions import ModelHTTPError
+
 from research import friendly_error, score_source
 from research_models import Nested, SearchResult
 
@@ -378,20 +381,63 @@ def _same_file(a: Path, b: Path) -> bool:
 
 # ---------------------------------------------------------------- the run
 
+RATE_LIMIT_WAIT = 65   # seconds to wait out a per-minute limit before one retry
+RESEARCH_COLUMNS = set(NEW_COLUMNS) | {FOCUS_COLUMN}
+
+
+def _row_key(company: str, domain: str) -> tuple[str, str]:
+    return (" ".join(company.lower().split()), domain)
+
+
+def _previous_research(
+    headers: list[str], rows: list[list[object]]
+) -> dict[tuple[str, str], dict[str, object]]:
+    """Finished research from an earlier results file, keyed by company + website."""
+    company_col = find_column(headers, COMPANY_HEADERS)
+    website_col = find_column(headers, WEBSITE_HEADERS)
+    if company_col is None or STATUS not in headers:
+        return {}
+    col = {h: i for i, h in enumerate(headers)}
+    found: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        if not str(row[col[STATUS]] or "").startswith(DONE_STATUSES):
+            continue
+        company = str(row[company_col] or "").strip()
+        domain = clean_domain(row[website_col]) if website_col is not None else ""
+        found.setdefault(
+            _row_key(company, domain),
+            {h: row[i] for h, i in col.items() if h in RESEARCH_COLUMNS},
+        )
+    return found
+
+
+async def _research_with_retry(company: str, domain: str, focus: str) -> dict[str, str]:
+    """Research one row; wait out a per-minute rate limit once instead of failing."""
+    try:
+        return await research_account(company, domain, focus)
+    except ModelHTTPError as exc:
+        if exc.status_code != 429 or "out of quota for today" in friendly_error(exc):
+            raise
+        print(f"   Rate limit for this minute; waiting {RATE_LIMIT_WAIT}s and trying again…", file=sys.stderr)
+        await asyncio.sleep(RATE_LIMIT_WAIT)
+        return await research_account(company, domain, focus)
+
+
 async def run_list(
     src: Path, out: Path, *, focus: str = "", limit: int | None = None,
     fresh: bool = False, sheet: str | None = None,
 ) -> dict[str, int]:
+    """Your list is the source of truth; the results file is rebuilt from it each run.
+
+    Companies already researched (in an earlier results file, or in the input
+    itself) are copied over, not researched again. New companies, failed rows and
+    rows not reached last time are researched. Other columns always come from
+    your list, so edits there (a new owner, say) show up in the results.
+    """
     if _same_file(src, out):
         raise SystemExit("The output file would overwrite your input. Choose a different --out.")
 
-    if out.exists() and not fresh:
-        # Carry on automatically: finished rows are skipped, failed ones retried.
-        print(f"Continuing {out.name} from where it stopped (use --fresh to start over).", file=sys.stderr)
-        headers, rows = read_table(out, None)
-    else:
-        headers, rows = read_table(src, sheet)
-
+    headers, rows = read_table(src, sheet)
     company_col = find_column(headers, COMPANY_HEADERS)
     if company_col is None:
         raise SystemExit(
@@ -399,51 +445,73 @@ async def run_list(
         )
     website_col = find_column(headers, WEBSITE_HEADERS)
 
+    previous: dict[tuple[str, str], dict[str, object]] = {}
+    if not fresh:
+        # Research already in the input (if you gave it a results file) ...
+        previous.update(_previous_research(headers, rows))
+        # ... and in the results file from the last run, which wins.
+        if out.exists():
+            old_headers, old_rows = read_table(out, None)
+            previous.update(_previous_research(old_headers, old_rows))
+
+    # Rebuild: your columns as they are now, then fresh research columns.
+    keep = [i for i, h in enumerate(headers) if h not in RESEARCH_COLUMNS]
+    headers = [headers[i] for i in keep]
+    rows = [[row[i] for i in keep] for row in rows]
+    company_col = find_column(headers, COMPANY_HEADERS)
+    website_col = find_column(headers, WEBSITE_HEADERS)
     wanted = list(NEW_COLUMNS)
-    if focus:
+    if focus or any(v.get(FOCUS_COLUMN) for v in previous.values()):
         wanted.insert(wanted.index("Sources"), FOCUS_COLUMN)
-    for column in wanted:
-        if column not in headers:
-            headers.append(column)
-            for row in rows:
-                row.append(None)
+    headers += wanted
+    for row in rows:
+        row.extend([None] * len(wanted))
     col = {h: i for i, h in enumerate(headers)}
 
-    counts = {"done": 0, "check": 0, "thin": 0, "failed": 0, "skipped": 0, "already": 0}
+    counts = {"done": 0, "check": 0, "thin": 0, "failed": 0, "skipped": 0, "already": 0, "waiting": 0}
     seen: dict[tuple[str, str], int] = {}
-    processed = 0
-    stop_message = ""
+    to_research: list[tuple[int, list[object], str, str]] = []
 
     for n, row in enumerate(rows, start=2):
-        status = str(row[col[STATUS]] or "")
         company = str(row[company_col] or "").strip()
         domain = clean_domain(row[website_col]) if website_col is not None else ""
-        if status.startswith(DONE_STATUSES):
-            seen.setdefault((company.lower(), domain), n)
-            counts["already"] += 1
-            continue
         if not company:
             row[col[STATUS]] = "Skipped: no company name"
             counts["skipped"] += 1
             continue
-        key = (company.lower(), domain)
+        key = _row_key(company, domain)
         if key in seen:
             row[col[STATUS]] = f"Skipped: same company as row {seen[key]}"
             counts["skipped"] += 1
             continue
         seen[key] = n
-        if limit is not None and processed >= limit:
-            break
+        if key in previous:
+            for h, value in previous[key].items():
+                if h in col:
+                    row[col[h]] = value
+            counts["already"] += 1
+        else:
+            row[col[STATUS]] = "Waiting: not researched yet"
+            to_research.append((n, row, company, domain))
 
-        processed += 1
-        print(f"[{processed}] {company}{f' ({domain})' if domain else ''}…", file=sys.stderr)
+    if previous and not fresh:
+        reused = counts["already"]
+        print(f"Reusing {reused} {'company' if reused == 1 else 'companies'} already researched; "
+              f"{len(to_research)} to research now.", file=sys.stderr)
+    write_table(out, headers, rows)
+
+    stop_message = ""
+    for processed, (n, row, company, domain) in enumerate(to_research, start=1):
+        if limit is not None and processed > limit:
+            break
+        print(f"[{processed}/{len(to_research)}] {company}{f' ({domain})' if domain else ''}…", file=sys.stderr)
         try:
-            values = await research_account(company, domain, focus)
+            values = await _research_with_retry(company, domain, focus)
         except SearchBlocked as exc:
-            stop_message = f"Google is asking for a check in the Chrome window. Solve it, then run the same command again to carry on. ({exc})"
+            stop_message = ("Google is asking for a check in the Chrome window. Solve it, then run the same "
+                            f"command again to carry on. ({exc})")
             row[col[STATUS]] = "Failed: Google check"
             counts["failed"] += 1
-            write_table(out, headers, rows)
             break
         except Exception as exc:
             message = friendly_error(exc).replace(
@@ -453,16 +521,18 @@ async def run_list(
             counts["failed"] += 1
             write_table(out, headers, rows)
             if "out of quota for today" in message:
-                stop_message = message + " Run the same command again after the reset; it carries on and finished rows are kept."
+                stop_message = message + " Run the same command again after the reset to carry on."
                 break
             continue
 
         for key_, value in values.items():
-            row[col[key_]] = value
+            if key_ in col:
+                row[col[key_]] = value
         result = values[STATUS]
         counts["done" if result == "Done" else "check" if result == "Check match" else "thin"] += 1
         write_table(out, headers, rows)  # after every row, so nothing is lost
 
+    counts["waiting"] = sum(1 for row in rows if str(row[col[STATUS]] or "").startswith("Waiting"))
     write_table(out, headers, rows)
     if stop_message:
         print(stop_message, file=sys.stderr)
@@ -478,7 +548,7 @@ def main() -> None:
     parser.add_argument("--focus", default="", help='Extra topic to look for, e.g. "contact center"')
     parser.add_argument("--limit", type=int, help="Research at most this many rows in this run")
     parser.add_argument("--fresh", action="store_true",
-                        help="Start over from the input, replacing the existing output file")
+                        help="Research every company again, ignoring earlier results")
     parser.add_argument("--resume", action="store_true", help=argparse.SUPPRESS)  # old flag; now automatic
     parser.add_argument("--sheet", help="Sheet name in the input workbook (default: the first)")
     args = parser.parse_args()
@@ -503,7 +573,8 @@ def main() -> None:
     print(
         f"Saved {out}\n"
         f"Done {counts['done']} · Check match {counts['check']} · Thin {counts['thin']} · "
-        f"Failed {counts['failed']} · Skipped {counts['skipped']} · Already done {counts['already']}"
+        f"Failed {counts['failed']} · Skipped {counts['skipped']} · Reused {counts['already']}"
+        + (f" · Still waiting {counts['waiting']} (run the same command again to carry on)" if counts["waiting"] else "")
     )
 
 

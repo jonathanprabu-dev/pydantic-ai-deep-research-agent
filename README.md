@@ -41,6 +41,7 @@ Citations are enforced in code, not just asked for: any URL the model produces t
 | `sources.py` | Prints where a report's citations came from, most-cited first |
 | `digest.py` | Builds `digest.md`, one index over every report in the folder |
 | `account_list.py` | Researches a spreadsheet of accounts row by row for BDRs (see below) |
+| `research_list.ps1` | One-step launcher for `account_list.py` on Windows |
 | `test_account_list.py` | Offline test for `account_list.py`: no key, no Chrome |
 | `.env` | `MODEL` plus the matching provider key (not committed) |
 
@@ -102,37 +103,59 @@ Searches run in a dedicated Chrome profile at `.chrome-profile/`, kept separate 
 
 `account_list.py` runs the same source-checked research over a whole spreadsheet, one row per company, and writes the results into new columns. It's built for sales development: research the target list before outreach instead of one company at a time.
 
+**One command, any time:**
+
 ```powershell
-python account_list.py sample_accounts.csv
-python account_list.py accounts.xlsx --focus "contact center" --limit 10
-python account_list.py accounts.xlsx --fresh     # start over instead of carrying on
+.\research_list.ps1 accounts.xlsx
+.\research_list.ps1 accounts.xlsx --focus "contact center"
 ```
 
-**Input:** a `.csv` or `.xlsx` with a company column (`Company`, `Company Name`, `Account` or `Account Name`) and ideally a website column (`Website` or `Domain`). Every other column is kept as it is.
+(`research_list.ps1` sets up `.venv` on first use. The direct equivalent is `python account_list.py accounts.xlsx`.)
 
-**Output:** `<name>_researched.xlsx` next to the input, with these columns added to every row:
+Your list is the source of truth. Each run rebuilds `accounts_researched.xlsx` from it:
+
+- companies already researched are **copied over, not researched again** (no quota spent)
+- **new companies** you've added are researched
+- rows that **failed** or **weren't reached** last time (daily limit, `--limit`) are researched
+- companies you've **removed** from the list drop out of the results
+- edits to your other columns (a new owner, a new column) show up in the results
+
+So the routine is: update your list, run the same command. If the daily limit stops a run, run it again after the reset. A per-minute rate limit is waited out automatically.
+
+| Option | What it does |
+|---|---|
+| `--focus "topic"` | Adds a Focus Fit column with evidence on that topic |
+| `--limit N` | Research at most N companies this run (good for a first test) |
+| `--fresh` | Research every company again, ignoring earlier results |
+| `--out file.xlsx` | Write the results somewhere else |
+| `--sheet name` | Which sheet of the input workbook to read |
+
+**Input:** a `.csv` or `.xlsx` with a company column (`Company`, `Company Name`, `Account` or `Account Name`) and ideally a website column (`Website` or `Domain`). A company is recognised across runs by its name plus website, so if you change a company's website it's researched again.
+
+**Output columns:**
 
 | Column | What's in it |
 |---|---|
-| Research Status | `Done`, `Thin` (little public information), `Check match` (the sources may be about a look-alike company), `Skipped` or `Failed` |
+| Research Status | `Done`, `Thin` (little public information), `Check match` (the sources may be about a look-alike company), `Waiting` (not reached yet), `Skipped` or `Failed` |
 | What They Do · Recent News · Priorities · Team & Hiring Signals | Short points, each ending in source numbers like `[1, 3]` |
 | Likely Buying Roles | Job titles, not names, and why each would care |
 | Talking Point | One opening line built on one cited fact |
-| Focus Fit | Only with `--focus`: evidence about that topic |
+| Focus Fit | With `--focus`: evidence about that topic |
 | Sources | The numbered sources for that row: title and URL |
+| Researched On | The date, so you can see how fresh it is |
 
 **Rules, enforced in code:**
 
 - A point survives only if it cites a URL that was really in that row's search results. Invented links are removed, and a point left with no real source is deleted.
 - It never collects contact details. Anything that looks like an email address or phone number is stripped. Contact data belongs in an enrichment tool such as Clay, with verification.
-- The input file is never changed. The output is saved after every row, so a crash or a quota stop loses nothing, and running the same command again carries on automatically: finished rows are skipped and failed ones retried. Use `--fresh` to start over.
+- Your list is never changed. The results file is saved after every company, so a crash or a quota stop loses nothing.
 - A company that appears twice is researched once. Blank company names are skipped.
 
-**Cost:** one model request per company plus four or five Google searches, so a free OpenRouter key covers about 45 companies a day. When the daily cap is hit the run stops cleanly and tells you to run the same command again after the reset.
+**Cost:** one model request per company plus four or five Google searches, so a free OpenRouter key covers about 45 companies a day.
 
 **Tuning:** `SEARCHES` at the top of `account_list.py` holds the Google queries per row; `PAGES_PER_ROW` sets how many full pages are read.
 
-**Test without a key or Chrome:** `python test_account_list.py` runs the whole flow on fake search results and a scripted model, and checks the rules above.
+**Test without a key or Chrome:** `python test_account_list.py` runs the whole flow on fake search results and a scripted model, and checks the rules above, including list edits and limits.
 
 ## Looking back at past reports
 
