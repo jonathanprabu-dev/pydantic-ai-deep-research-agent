@@ -3,3 +3,4 @@ gradio
 python-dotenv
 playwright
 python-docx
+openpyxl

@@ -40,6 +40,8 @@ Citations are enforced in code, not just asked for: any URL the model produces t
 | `app.py` | The Gradio UI: Chat tab + Deep Research tab |
 | `sources.py` | Prints where a report's citations came from, most-cited first |
 | `digest.py` | Builds `digest.md`, one index over every report in the folder |
+| `account_list.py` | Researches a spreadsheet of accounts row by row for BDRs (see below) |
+| `test_account_list.py` | Offline test for `account_list.py`: no key, no Chrome |
 | `.env` | `MODEL` plus the matching provider key (not committed) |
 
 ## Setup (Windows / PowerShell)
@@ -95,6 +97,42 @@ python agent.py              # just the chat agent, one question
 ### The Chrome window
 
 Searches run in a dedicated Chrome profile at `.chrome-profile/`, kept separate from your normal browsing. The window is visible on purpose: if Google ever shows a consent screen or a CAPTCHA, solve it in that window and the profile remembers it. The app tells you when this happens instead of silently returning nothing.
+
+## Researching a list of accounts (for BDRs)
+
+`account_list.py` runs the same source-checked research over a whole spreadsheet, one row per company, and writes the results into new columns. It's built for sales development: research the target list before outreach instead of one company at a time.
+
+```powershell
+python account_list.py sample_accounts.csv
+python account_list.py accounts.xlsx --focus "contact center" --limit 10
+python account_list.py accounts.xlsx --resume
+```
+
+**Input:** a `.csv` or `.xlsx` with a company column (`Company`, `Company Name`, `Account` or `Account Name`) and ideally a website column (`Website` or `Domain`). Every other column is kept as it is.
+
+**Output:** `<name>_researched.xlsx` next to the input, with these columns added to every row:
+
+| Column | What's in it |
+|---|---|
+| Research Status | `Done`, `Thin` (little public information), `Check match` (the sources may be about a look-alike company), `Skipped` or `Failed` |
+| What They Do · Recent News · Priorities · Team & Hiring Signals | Short points, each ending in source numbers like `[1, 3]` |
+| Likely Buying Roles | Job titles, not names, and why each would care |
+| Talking Point | One opening line built on one cited fact |
+| Focus Fit | Only with `--focus`: evidence about that topic |
+| Sources | The numbered sources for that row: title and URL |
+
+**Rules, enforced in code:**
+
+- A point survives only if it cites a URL that was really in that row's search results. Invented links are removed, and a point left with no real source is deleted.
+- It never collects contact details. Anything that looks like an email address or phone number is stripped. Contact data belongs in an enrichment tool such as Clay, with verification.
+- The input file is never changed. The output is saved after every row, so a crash or a quota stop loses nothing, and `--resume` carries on from the first unfinished row.
+- A company that appears twice is researched once. Blank company names are skipped.
+
+**Cost:** one model request per company plus four or five Google searches, so a free OpenRouter key covers about 45 companies a day. When the daily cap is hit the run stops cleanly and tells you to `--resume` after the reset.
+
+**Tuning:** `SEARCHES` at the top of `account_list.py` holds the Google queries per row; `PAGES_PER_ROW` sets how many full pages are read.
+
+**Test without a key or Chrome:** `python test_account_list.py` runs the whole flow on fake search results and a scripted model, and checks the rules above.
 
 ## Looking back at past reports
 

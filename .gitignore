@@ -24,3 +24,6 @@ docs.md
 
 # The CLI's scratch output; the same report is kept under its own name
 report.md
+
+# account_list.py output
+*_researched.xlsx
