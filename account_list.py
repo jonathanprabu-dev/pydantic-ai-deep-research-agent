@@ -66,7 +66,7 @@ SEARCH_PAUSE = (6.0, 12.0)
 FOCUS_SEARCH = '"{company}" {focus}'
 
 COMPANY_HEADERS = ("company", "company name", "account", "account name", "organization", "name")
-WEBSITE_HEADERS = ("website", "domain", "company website", "company domain", "url", "web site", "site")
+WEBSITE_HEADERS = ("website", "domain", "company website", "company domain", "company domain name", "url", "web site", "site")
 
 STATUS = "Research Status"
 NEW_COLUMNS = [
